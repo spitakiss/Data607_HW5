@@ -1,0 +1,191 @@
+---
+title: "Week 5 Homework: Tidying Data"
+author: "Aaron Grzasko"
+date: "October 2, 2016"
+output: 
+    html_document:
+        theme: flatly
+        highlight: haddock
+---
+
+---  
+
+## Assignment Overview
+
+The primary purpose of this exercise is to gain experience manipulating untidy data.  We will use two powerful R packages--tidyr and dplyr--to wrangle a small albeit messy data set into tidy form.  
+  
+According to Hadley Wickham--see [*Tidy Data R Vignette*](ftp://cran.r-project.org/pub/R/web/packages/tidyr/vignettes/tidy-data.html)--tidy data conform to three principles:  
+  
+* Variables are stored in separate columns
+* Observations are stored in separate rows
+* Each observational unit forms a table  
+  
+Once we have tidied our data, we will perform basic graphical and statistical analysis.  
+  
+## Libraries  
+```{r load_lib, warning=FALSE, message=FALSE}
+# install.packages(c("tidyr","dplyr"))
+library(tidyr)
+library(dplyr)
+```
+
+## Data  
+  
+In this assignment, we review flight delay data for two airline carriers and five separate cities--refer to the [assignment instructions](https://bbhosted.cuny.edu/bbcswebdav/pid-25842532-dt-content-rid-119781391_1/xid-119781391_1) for more details.  
+ 
+This data was inputted manually in a .csv file and saved to a [Github repository](https://github.com/spitakiss/Data607_HW5/blob/master/flight_info.csv).  
+  
+Let's load the csv file into the R environment and view its contents:  
+```{r loaddata, comment=NA}
+myurl <- "https://raw.githubusercontent.com/spitakiss/Data607_HW5/master/flight_info.csv"
+flight <- read.csv(myurl, header = TRUE, stringsAsFactors = FALSE)
+flight
+```
+  
+The current `flight` data frame is in a messy, wide format and will require multiple transforms to produce an object in tidy form.  
+
+## Tidy Operations  
+
+In transforming the raw `flight` object, we made the following assumptions:  
+  
+* The flight statuses "on time" and "delayed" are separate variables and should be stored in separate columns.  
+* The various city columns in the raw data set belong to a master *city* variable and should be stored in a single column.
+* An observation is defined by flight metrics for a specific airline and city combination.  
+  
+Here is an overview of the tidying operations performed--also refer to the annotations within the subsequent code chunk:  
+  
+1.  *Rename columns*.  The original csv file did have proper names for the first two columns: airline or flight status.  By default, the `read.csv()` function named these columns "X"" and "X1".  We use the `rename()` function to update with proper labels.  
+2.  *Delete whitespace*.  We use the dplyr function `filter()` to eliminate the unnecessary row that separates observations relating to Alaska and AM West airlines.  
+3.  *Update elements in existing fields.*  We made adjustments to specific elements the *airline* and *status* fields:  
+    + *Airlines*: Some rows had missing values for the appropriate airline carrier.  Fortunately, the correct carrier information for these rows were located in the preceding record.  Values were populated using the `mutate()`, `ifelse()`, and `lag()` functions.  
+    + *Status*: In a later step we treat the element "on time" as separate variable stored in  a unique column.  We replace "on time" with "on_time" to follow standard naming conventions for field names.  
+4.  *Convert city columns to rows*.  We assume *city* is a variable in this analysis. Using `gather()`, we convert the relevant city columns to rows.  
+5.  *Store flight status elements as separate columns*.  This transformation was achieved using the `spread()` function.
+6.  *Add new columns with relevant metrics.*  Using `mutate()`, we added a new column that calculate the total number of flights for given city/airport combination.  We also added two additional columns that describe each observation's on time and delayed flight percentage, respectively.   
+
+
+
+```{r comment=NA}
+flight <-   flight %>%
+                #1
+                rename(airline = X, status = X.1) %>%  #1
+                #2
+                filter(status != "") %>%
+                # 3
+                mutate(
+                    airline  = ifelse(airline == "", lag(airline),airline),
+                    status = ifelse(status == "on time", "on_time", status)
+                    ) %>%
+                # 4
+                gather("city", "num_flights", Los.Angeles:Seattle) %>%
+                # 5
+                spread(status, num_flights) %>%
+                # 6
+                mutate(
+                    ttl_flights = delayed + on_time,
+                    on_time_per = round(on_time / ttl_flights,4),
+                    delay_per = round(delayed / ttl_flights,4)
+                )
+    
+flight
+```
+
+## Graphical and Tabular Summaries  
+  
+**By City**  
+Below we summarize the proportion of delayed flights by city for each airline, with output in both tabular and bar plot formats:  
+
+```{r, comment=NA}
+
+flight.redux <- flight %>%
+                    select(c(airline,city, delay_per)) %>%
+                    spread(city, delay_per) %>%
+                    select(Los.Angeles:Seattle) %>%
+                    as.matrix()
+rownames(flight.redux) <- unique(flight$airline)
+
+flight.redux
+
+barplot(flight.redux, beside = TRUE, main = "Proportion of Flights Delayed", xlab = "City", col=c("royalblue3","palegreen3"))          
+legend("topleft", rownames(flight.redux), pch = 15, bty = 'n', col = c("royalblue3","palegreen3"))
+```
+  
+Interestingly enough, Alaska Airlines has a lower proportion of flight delays than AM West for each of the five observed cities.  
+  
+**In Aggregate**  
+Now, let's produce a summary table and bar plot by carrier for all cities combined:   
+
+```{r, comment=NA}
+flight_all_city <- flight %>%
+                    group_by(airline) %>%
+                    summarise(delay_prop = sum(delayed)/sum(ttl_flights)) %>%
+                    select(delay_prop) %>%
+                    as.matrix()
+
+rownames(flight_all_city) <- unique(flight$airline)
+
+flight_all_city
+
+barplot(flight_all_city, beside = TRUE, main = "Proportion of Flights Delayed", xlab = "All Cities", col=c("royalblue3","palegreen3"), ylim = c(0,0.2))      
+
+legend("topleft", rownames(flight_all_city), pch = 15, bty = 'n', col = c("royalblue3","palegreen3"))
+
+```
+  
+Surprisingly, the  flight data--when aggregated together--reveal a striking pattern reversal:  AM West's total flight delay percentage is lower than the corresponding percentage for Alaska!  
+  
+These counter intuitive results are common to the world of statisticians.  In fact, this phenomenon even has a name:  [Simpson's paradox](https://en.wikipedia.org/wiki/Simpson%27s_paradox).  
+  
+  
+## Statistical Analysis
+  
+**By City**  
+As noted previously, the proportion of delayed flights for Alaska airlines is lower than AM West for each of the five cities in the data set.  Let's now use the function `prop.text()` to determine if the calculated difference in proportions is statistically meaningful at the 5% level of significance.  
+
+```{r, stat_test, comment=NA}
+for (i in unique(flight$city)){ 
+    flight_sub <- filter(flight, city == i)
+    delay_AM <- sum(select(filter(flight_sub, airline == 'AM WEST'),delayed))
+    delay_AK <- sum(select(filter(flight_sub, airline =='ALASKA'), delayed))
+    ttl_AM <- sum(select(filter(flight_sub, airline == 'AM WEST'),ttl_flights))
+    ttl_AK <- sum(select(filter(flight_sub, airline == 'ALASKA'),ttl_flights))
+    print("--------------------------------------------------------------------")
+    cat("Prop test for:", i)
+    print(prop.test(c(delay_AM,delay_AK), c(ttl_AM,ttl_AK)))
+}
+
+```
+
+Using a 5% level of significance,  we reject the null hypothesis of equal delay proportions for the following cities:  
+  
+* San Diego
+* San Francisco
+* Seattle  
+  
+We fail to reject the null hypothesis for the following cities:  
+  
+* Los Angeles
+* Phoenix  
+  
+**In Aggregate**  
+Finally, let's repeat the proportions test for the aggregated flight data:  
+  
+```{r, comment=NA}
+flight_all_city2 <- flight %>%
+                    group_by(airline) %>%
+                    summarise(
+                        delayed = sum(delayed),
+                        ttl_flights = sum(ttl_flights)
+                        )
+
+delay_AM2 <- sum(select(filter(flight_all_city2, airline == 'AM WEST'),delayed))
+delay_AK2 <- sum(select(filter(flight_all_city2, airline =='ALASKA'), delayed))
+ttl_AM2 <- sum(select(filter(flight_all_city2, airline == 'AM WEST'),ttl_flights))
+ttl_AK2 <- sum(select(filter(flight_all_city2, airline == 'ALASKA'),ttl_flights))
+
+print(prop.test(c(delay_AM2,delay_AK2), c(ttl_AM2,ttl_AK2)))
+
+```
+  
+At the 5% level of significance, we reject the null hypothesis that the difference in proportions is zero.  
+
